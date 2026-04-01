@@ -42,6 +42,8 @@ class CustomProvider(LLMProvider):
             return LLMResponse(content=f"Error: {e}", finish_reason="error")
 
     def _parse(self, response: Any) -> LLMResponse:
+        if not response.choices:
+            return LLMResponse(content="Error: model returned no choices", finish_reason="error")
         choice = response.choices[0]
         msg = choice.message
         tool_calls = [

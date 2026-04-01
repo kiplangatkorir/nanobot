@@ -281,6 +281,8 @@ class LiteLLMProvider(LLMProvider):
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""
+        if not response.choices:
+            return LLMResponse(content="Error: model returned no choices", finish_reason="error")
         choice = response.choices[0]
         message = choice.message
         content = message.content
