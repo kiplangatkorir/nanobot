@@ -1,6 +1,7 @@
 """Session management for conversation history."""
 
 import json
+import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -163,7 +164,11 @@ class SessionManager:
                     if not line:
                         continue
 
-                    data = json.loads(line)
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        logger.warning("Skipping corrupt line in session {}", key)
+                        continue
 
                     if data.get("_type") == "metadata":
                         metadata = data.get("metadata", {})
@@ -184,21 +189,38 @@ class SessionManager:
             return None
 
     def save(self, session: Session) -> None:
-        """Save a session to disk."""
-        path = self._get_session_path(session.key)
+        """Save a session to disk atomically.
 
-        with open(path, "w", encoding="utf-8") as f:
-            metadata_line = {
-                "_type": "metadata",
-                "key": session.key,
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat(),
-                "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated
-            }
-            f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
-            for msg in session.messages:
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        Writes to a temporary file first, then atomically replaces
+        the target. This prevents data loss if the process crashes
+        mid-write (the old file remains intact until os.replace succeeds).
+        """
+        path = self._get_session_path(session.key)
+        tmp_path = path.with_suffix(".jsonl.tmp")
+
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                metadata_line = {
+                    "_type": "metadata",
+                    "key": session.key,
+                    "created_at": session.created_at.isoformat(),
+                    "updated_at": session.updated_at.isoformat(),
+                    "metadata": session.metadata,
+                    "last_consolidated": session.last_consolidated
+                }
+                f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
+                for msg in session.messages:
+                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp_path), str(path))
+        except Exception:
+            # Clean up temp file on failure; original file is untouched
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
         self._cache[session.key] = session
 
